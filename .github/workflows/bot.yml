@@ -25,7 +25,6 @@ jobs:
   pr-opened:
     if: github.event_name == 'pull_request' && github.event.action != 'closed'
     runs-on: ubuntu-latest
-
     steps:
       - name: Generate DevHub Bot token
         id: app-token
@@ -33,6 +32,25 @@ jobs:
         with:
           app-id: ${{ secrets.DEVHUB_APP_ID }}
           private-key: ${{ secrets.DEVHUB_APP_PRIVATE_KEY }}
+
+      - name: Create in-progress check
+        id: create-check
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ steps.app-token.outputs.token }}
+          script: |
+            const check = await github.rest.checks.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              name: "DevHub Bot / PR Conventions",
+              head_sha: context.payload.pull_request.head.sha,
+              status: "in_progress",
+              output: {
+                title: "Checking PR title and commits...",
+                summary: "Analyzing commits and PR title for Conventional Commits"
+              }
+            });
+            core.setOutput("check_id", check.data.id);
 
       - name: Fetch PR commits
         id: commits
@@ -48,18 +66,24 @@ jobs:
                 pull_number: context.payload.pull_request.number
               }
             );
-
             const messages = commits.map(c => c.commit.message);
             core.setOutput("messages", JSON.stringify(messages));
 
-      - name: Analyze Conventional Commits
+      - name: Analyze PR title + commits
         id: analyze
         run: |
           echo '${{ steps.commits.outputs.messages }}' > commits.json
-
           FOUND=false
           LABELS=""
+          PR_TITLE="${{ github.event.pull_request.title }}"
+          TITLE_VALID=false
 
+          # Check PR title
+          if [[ "$PR_TITLE" =~ ^(feat|fix|docs|style|refactor|perf|test|chore)(\(.+\))?:\ .+ ]]; then
+            TITLE_VALID=true
+          fi
+
+          # Check commits
           while read -r msg; do
             if [[ "$msg" =~ ^(feat|fix|docs|style|refactor|perf|test|chore)(\(.+\))?:\ .+ ]]; then
               FOUND=true
@@ -68,7 +92,12 @@ jobs:
             fi
           done < <(jq -r '.[]' commits.json)
 
-          echo "pass=$FOUND" >> $GITHUB_OUTPUT
+          PASS=false
+          if [ "$FOUND" = true ] && [ "$TITLE_VALID" = true ]; then
+            PASS=true
+          fi
+
+          echo "pass=$PASS" >> $GITHUB_OUTPUT
           echo "labels=$(echo $LABELS | tr ' ' '\n' | sort -u | tr '\n' ',' | sed 's/,$//')" >> $GITHUB_OUTPUT
 
       - name: Apply labels
@@ -84,29 +113,26 @@ jobs:
               labels: "${{ steps.analyze.outputs.labels }}".split(",")
             });
 
-      - name: Create check run
+      - name: Update check with result
         uses: actions/github-script@v7
         with:
           github-token: ${{ steps.app-token.outputs.token }}
           script: |
-            await github.rest.checks.create({
+            await github.rest.checks.update({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              name: "DevHub Bot / Conventional Commits",
-              head_sha: context.payload.pull_request.head.sha,
+              check_run_id: parseInt("${{ steps.create-check.outputs.check_id }}"),
               status: "completed",
-              conclusion: "${{ steps.analyze.outputs.pass }}" === "true"
-                ? "success"
-                : "failure",
+              conclusion: "${{ steps.analyze.outputs.pass }}" === "true" ? "success" : "failure",
               output: {
-                title: "Conventional Commits",
+                title: "DevHub Bot / PR Conventions",
                 summary: "${{ steps.analyze.outputs.pass }}" === "true"
-                  ? "At least one commit follows Conventional Commits."
-                  : "No commits follow Conventional Commits."
+                  ? "PR title and at least one commit follow Conventional Commits."
+                  : "PR title or commits do not follow Conventional Commits."
               }
             });
 
-      - name: Thank contributor on PR open
+      - name: Thank contributor
         if: steps.analyze.outputs.pass == 'true'
         uses: actions/github-script@v7
         with:
@@ -122,7 +148,6 @@ jobs:
   pr-merged:
     if: github.event_name == 'pull_request' && github.event.pull_request.merged == true
     runs-on: ubuntu-latest
-
     steps:
       - name: Generate DevHub Bot token
         id: app-token
@@ -146,7 +171,6 @@ jobs:
   issue-opened:
     if: github.event_name == 'issues' && github.event.action == 'opened'
     runs-on: ubuntu-latest
-
     steps:
       - name: Generate DevHub Bot token
         id: app-token
@@ -161,7 +185,6 @@ jobs:
           github-token: ${{ steps.app-token.outputs.token }}
           script: |
             const title = context.payload.issue.title.toLowerCase();
-
             if (title.includes("bug")) {
               await github.rest.issues.addLabels({
                 owner: context.repo.owner,
