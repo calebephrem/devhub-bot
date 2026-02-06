@@ -15,6 +15,12 @@ on:
         default: '🎉 Thank you for contributing to Open DevHub! We appreciate your work.'
         type: string
 
+      cc_warning_message:
+        description: 'Message when PR does NOT follow conventional commits'
+        required: false
+        default: '⚠️ Please consider following Conventional Commits for your PR title and commit messages.'
+        type: string
+
     secrets:
       DEVHUB_APP_ID:
         required: true
@@ -25,6 +31,7 @@ jobs:
   pr-opened:
     if: github.event_name == 'pull_request' && github.event.action != 'closed' && github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
+
     steps:
       - name: Generate DevHub Bot token
         id: app-token
@@ -32,25 +39,6 @@ jobs:
         with:
           app-id: ${{ secrets.DEVHUB_APP_ID }}
           private-key: ${{ secrets.DEVHUB_APP_PRIVATE_KEY }}
-
-      - name: Create in-progress check
-        id: create-check
-        uses: actions/github-script@v7
-        with:
-          github-token: ${{ steps.app-token.outputs.token }}
-          script: |
-            const check = await github.rest.checks.create({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              name: "DevHub Bot / PR Conventions",
-              head_sha: context.payload.pull_request.head.sha,
-              status: "in_progress",
-              output: {
-                title: "Checking PR title and commits...",
-                summary: "Analyzing PR title and commits for Conventional Commits"
-              }
-            });
-            core.setOutput("check_id", check.data.id);
 
       - name: Fetch PR commits
         id: commits
@@ -73,71 +61,37 @@ jobs:
         run: |
           echo '${{ steps.commits.outputs.messages }}' > commits.json
 
-          PASS=false
-          LABELS=""
-          TITLE_VALID=false
+          FOUND=false
           PR_TITLE="${{ github.event.pull_request.title }}"
 
           # Check PR title
           if [[ "$PR_TITLE" =~ ^(feat|fix|docs|style|refactor|perf|test|chore)(\(.+\))?:\ .+ ]]; then
-            TITLE_VALID=true
+            FOUND=true
           fi
 
           # Check commits
           while read -r msg; do
             if [[ "$msg" =~ ^(feat|fix|docs|style|refactor|perf|test|chore)(\(.+\))?:\ .+ ]]; then
-              TYPE=$(echo "$msg" | sed -E 's/^([a-z]+).*/\1/')
-              LABELS="$LABELS $TYPE"
-              PASS=true
+              FOUND=true
             fi
           done < <(jq -r '.[]' commits.json)
 
-          echo "pass=$PASS" >> $GITHUB_OUTPUT
-          echo "labels=$(echo $LABELS | tr ' ' '\n' | sort -u | tr '\n' ',' | sed 's/,$//')" >> $GITHUB_OUTPUT
+          echo "pass=$FOUND" >> $GITHUB_OUTPUT
 
-      - name: Apply labels
-        if: steps.analyze.outputs.labels != ''
+      - name: Comment on PR
         uses: actions/github-script@v7
         with:
           github-token: ${{ steps.app-token.outputs.token }}
           script: |
-            await github.rest.issues.addLabels({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              issue_number: context.payload.pull_request.number,
-              labels: "${{ steps.analyze.outputs.labels }}".split(",")
-            });
-
-      - name: Update check with result
-        uses: actions/github-script@v7
-        with:
-          github-token: ${{ steps.app-token.outputs.token }}
-          script: |
-            await github.rest.checks.update({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              check_run_id: parseInt("${{ steps.create-check.outputs.check_id }}"),
-              status: "completed",
-              conclusion: "${{ steps.analyze.outputs.pass }}" === "true" ? "success" : "failure",
-              output: {
-                title: "DevHub Bot / PR Conventions",
-                summary: "${{ steps.analyze.outputs.pass }}" === "true"
-                  ? "PR title and at least one commit follow Conventional Commits."
-                  : "PR title or commits do not follow Conventional Commits."
-              }
-            });
-
-      - name: Thank contributor
-        if: steps.analyze.outputs.pass == 'true'
-        uses: actions/github-script@v7
-        with:
-          github-token: ${{ steps.app-token.outputs.token }}
-          script: |
+            const pr_number = context.payload.pull_request.number;
+            const msg = "${{ steps.analyze.outputs.pass }}" === "true" 
+                        ? `${{ inputs.thank_you_message }}`
+                        : `${{ inputs.cc_warning_message }}`;
             await github.rest.issues.createComment({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              issue_number: context.payload.pull_request.number,
-              body: `${{ inputs.thank_you_message }}`
+              issue_number: pr_number,
+              body: msg
             });
 
   pr-merged:
@@ -151,7 +105,7 @@ jobs:
           app-id: ${{ secrets.DEVHUB_APP_ID }}
           private-key: ${{ secrets.DEVHUB_APP_PRIVATE_KEY }}
 
-      - name: Thank contributor after merge
+      - name: Thank contributor
         uses: actions/github-script@v7
         with:
           github-token: ${{ steps.app-token.outputs.token }}
