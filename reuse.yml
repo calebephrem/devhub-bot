@@ -3,6 +3,8 @@ name: DevHub Bot
 on:
   pull_request:
     types: [opened, synchronize, closed]
+  issues:
+    types: [opened]
 
 jobs:
   devhub-bot:
