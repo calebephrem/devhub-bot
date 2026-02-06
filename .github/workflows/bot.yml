@@ -1,0 +1,143 @@
+name: DevHub Bot (Reusable)
+
+on:
+  workflow_call:
+    inputs:
+      thank_you_message:
+        description: 'Message when PR follows conventional commits'
+        required: false
+        default: "🤖 **DevHub Bot**\n\nThank you for opening this PR! Repo maintainers will review it ASAP 🚀"
+        type: string
+
+      merge_thank_you_message:
+        description: 'Message when PR is merged'
+        required: false
+        default: "🎉 **DevHub Bot**\n\nThank you for contributing to Open DevHub! Your work is appreciated 💙"
+        type: string
+
+    secrets:
+      DEVHUB_APP_ID:
+        required: true
+      DEVHUB_APP_PRIVATE_KEY:
+        required: true
+
+jobs:
+  pr-opened:
+    if: github.event_name == 'pull_request' && github.event.action != 'closed'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Generate DevHub Bot token
+        id: app-token
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ secrets.DEVHUB_APP_ID }}
+          private-key: ${{ secrets.DEVHUB_APP_PRIVATE_KEY }}
+
+      - name: Fetch PR commits
+        id: commits
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ steps.app-token.outputs.token }}
+          script: |
+            const { owner, repo } = context.repo;
+            const pr = context.payload.pull_request.number;
+
+            const commits = await github.paginate(
+              github.rest.pulls.listCommits,
+              { owner, repo, pull_number: pr }
+            );
+
+            const messages = commits.map(c => c.commit.message);
+            core.setOutput("messages", JSON.stringify(messages));
+
+      - name: Analyze Conventional Commits
+        id: analyze
+        run: |
+          echo '${{ steps.commits.outputs.messages }}' > commits.json
+
+          PASS=true
+          LABELS=""
+
+          while read -r msg; do
+            if [[ "$msg" =~ ^(feat|fix|docs|style|refactor|perf|test|chore)(\(.+\))?:\ .+ ]]; then
+              TYPE=$(echo "$msg" | sed -E 's/^([a-z]+).*/\1/')
+              LABELS="$LABELS $TYPE"
+            else
+              PASS=false
+            fi
+          done < <(jq -r '.[]' commits.json)
+
+          echo "pass=$PASS" >> $GITHUB_OUTPUT
+          echo "labels=$(echo $LABELS | tr ' ' '\n' | sort -u | tr '\n' ',' | sed 's/,$//')" >> $GITHUB_OUTPUT
+
+      - name: Apply labels
+        if: steps.analyze.outputs.labels != ''
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ steps.app-token.outputs.token }}
+          script: |
+            const labels = "${{ steps.analyze.outputs.labels }}".split(",");
+            await github.rest.issues.addLabels({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.payload.pull_request.number,
+              labels
+            });
+
+      - name: Create check run
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ steps.app-token.outputs.token }}
+          script: |
+            await github.rest.checks.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              name: "DevHub Bot / Conventional Commits",
+              head_sha: context.payload.pull_request.head.sha,
+              status: "completed",
+              conclusion: "${{ steps.analyze.outputs.pass }}" === "true" ? "success" : "failure",
+              output: {
+                title: "Conventional Commits",
+                summary: "${{ steps.analyze.outputs.pass }}" === "true"
+                  ? "All commits follow Conventional Commits 🎉"
+                  : "Some commits do NOT follow Conventional Commits"
+              }
+            });
+
+      - name: Thank contributor on PR open
+        if: steps.analyze.outputs.pass == 'true'
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ steps.app-token.outputs.token }}
+          script: |
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.payload.pull_request.number,
+              body: `${{ inputs.thank_you_message }}`
+            });
+
+  pr-merged:
+    if: github.event_name == 'pull_request' && github.event.pull_request.merged == true
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Generate DevHub Bot token
+        id: app-token
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ secrets.DEVHUB_APP_ID }}
+          private-key: ${{ secrets.DEVHUB_APP_PRIVATE_KEY }}
+
+      - name: Thank contributor after merge
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ steps.app-token.outputs.token }}
+          script: |
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.payload.pull_request.number,
+              body: `${{ inputs.merge_thank_you_message }}`
+            });
