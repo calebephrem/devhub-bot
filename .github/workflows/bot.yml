@@ -23,7 +23,7 @@ on:
 
 jobs:
   pr-opened:
-    if: github.event_name == 'pull_request' && github.event.action != 'closed'
+    if: github.event_name == 'pull_request' && github.event.action != 'closed' && github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     steps:
       - name: Generate DevHub Bot token
@@ -47,7 +47,7 @@ jobs:
               status: "in_progress",
               output: {
                 title: "Checking PR title and commits...",
-                summary: "Analyzing commits and PR title for Conventional Commits"
+                summary: "Analyzing PR title and commits for Conventional Commits"
               }
             });
             core.setOutput("check_id", check.data.id);
@@ -66,17 +66,17 @@ jobs:
                 pull_number: context.payload.pull_request.number
               }
             );
-            const messages = commits.map(c => c.commit.message);
-            core.setOutput("messages", JSON.stringify(messages));
+            core.setOutput("messages", JSON.stringify(commits.map(c => c.commit.message)));
 
       - name: Analyze PR title + commits
         id: analyze
         run: |
           echo '${{ steps.commits.outputs.messages }}' > commits.json
-          FOUND=false
+
+          PASS=false
           LABELS=""
-          PR_TITLE="${{ github.event.pull_request.title }}"
           TITLE_VALID=false
+          PR_TITLE="${{ github.event.pull_request.title }}"
 
           # Check PR title
           if [[ "$PR_TITLE" =~ ^(feat|fix|docs|style|refactor|perf|test|chore)(\(.+\))?:\ .+ ]]; then
@@ -86,16 +86,11 @@ jobs:
           # Check commits
           while read -r msg; do
             if [[ "$msg" =~ ^(feat|fix|docs|style|refactor|perf|test|chore)(\(.+\))?:\ .+ ]]; then
-              FOUND=true
               TYPE=$(echo "$msg" | sed -E 's/^([a-z]+).*/\1/')
               LABELS="$LABELS $TYPE"
+              PASS=true
             fi
           done < <(jq -r '.[]' commits.json)
-
-          PASS=false
-          if [ "$FOUND" = true ] && [ "$TITLE_VALID" = true ]; then
-            PASS=true
-          fi
 
           echo "pass=$PASS" >> $GITHUB_OUTPUT
           echo "labels=$(echo $LABELS | tr ' ' '\n' | sort -u | tr '\n' ',' | sed 's/,$//')" >> $GITHUB_OUTPUT
