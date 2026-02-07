@@ -20,16 +20,17 @@ on:
 
     secrets:
       DEVHUB_APP_ID:
-        required: true
+        required: false
       DEVHUB_APP_PRIVATE_KEY:
-        required: true
+        required: false
 
 jobs:
   pr-handler:
     runs-on: ubuntu-latest
     if: github.event.pull_request != null
+
     steps:
-      - name: Checkout base branch only
+      - name: Checkout base branch
         uses: actions/checkout@v5
         with:
           ref: ${{ github.event.pull_request.base.ref }}
@@ -37,17 +38,18 @@ jobs:
           persist-credentials: false
 
       - name: Generate DevHub Bot token
+        if: ${{ secrets.DEVHUB_APP_ID && secrets.DEVHUB_APP_PRIVATE_KEY }}
         id: app-token
         uses: actions/create-github-app-token@v1
         with:
           app-id: ${{ secrets.DEVHUB_APP_ID }}
           private-key: ${{ secrets.DEVHUB_APP_PRIVATE_KEY }}
 
-      - name: Fetch all PR commits via API
+      - name: Fetch PR commits
         id: commits
         uses: actions/github-script@v7
         with:
-          github-token: ${{ steps.app-token.outputs.token }}
+          github-token: ${{ steps.app-token.outputs.token || github.token }}
           script: |
             const commits = await github.paginate(
               github.rest.pulls.listCommits,
@@ -59,7 +61,7 @@ jobs:
             );
             core.setOutput("messages", JSON.stringify(commits.map(c => c.commit.message)));
 
-      - name: Check Conventional Commits
+      - name: Check CC compliance
         id: analyze
         run: |
           echo '${{ steps.commits.outputs.messages }}' > commits.json
@@ -76,12 +78,13 @@ jobs:
 
           echo "non_cc=$NON_CC" >> $GITHUB_OUTPUT
 
-      - name: Comment as bot
+      - name: Comment PR
         uses: actions/github-script@v7
         with:
-          github-token: ${{ steps.app-token.outputs.token }}
+          github-token: ${{ steps.app-token.outputs.token || github.token }}
           script: |
-            const body = "${{ steps.analyze.outputs.non_cc }}" === "true"
+            const nonCC = "${{ steps.analyze.outputs.non_cc }}" === "true";
+            const body = nonCC
               ? `${{ inputs.cc_warning_message }}`
               : `${{ inputs.thank_you_message }}`;
 
@@ -101,16 +104,17 @@ jobs:
           ref: ${{ github.event.pull_request.base.ref }}
 
       - name: Generate DevHub Bot token
+        if: ${{ secrets.DEVHUB_APP_ID && secrets.DEVHUB_APP_PRIVATE_KEY }}
         id: app-token
         uses: actions/create-github-app-token@v1
         with:
           app-id: ${{ secrets.DEVHUB_APP_ID }}
           private-key: ${{ secrets.DEVHUB_APP_PRIVATE_KEY }}
 
-      - name: Thank contributor as bot
+      - name: Thank contributor
         uses: actions/github-script@v7
         with:
-          github-token: ${{ steps.app-token.outputs.token }}
+          github-token: ${{ steps.app-token.outputs.token || github.token }}
           script: |
             await github.rest.issues.createComment({
               owner: context.repo.owner,
@@ -124,6 +128,7 @@ jobs:
     if: github.event_name == 'issues' && github.event.action == 'opened'
     steps:
       - name: Generate DevHub Bot token
+        if: ${{ secrets.DEVHUB_APP_ID && secrets.DEVHUB_APP_PRIVATE_KEY }}
         id: app-token
         uses: actions/create-github-app-token@v1
         with:
@@ -133,10 +138,9 @@ jobs:
       - name: Handle issue open (labels + comment)
         uses: actions/github-script@v7
         with:
-          github-token: ${{ steps.app-token.outputs.token }}
+          github-token: ${{ steps.app-token.outputs.token || github.token }}
           script: |
             const issue = context.payload.issue;
-
             const text = `${issue.title}\n${issue.body ?? ""}`.toLowerCase();
 
             const rules = [
