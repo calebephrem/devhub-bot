@@ -5,12 +5,12 @@ on:
     inputs:
       thank_you_message:
         required: false
-        default: 'Thank you for opening this PR! Repo maintainers will review it ASAP 🚀'
+        default: "Thank you for opening this PR! Repo maintainers will review it ASAP 🚀"
         type: string
 
       merge_thank_you_message:
         required: false
-        default: '🎉 Thank you for contributing! We really appreciate your work.'
+        default: "🎉 Thank you for contributing! We really appreciate your work."
         type: string
 
       cc_warning_message:
@@ -27,9 +27,15 @@ on:
 jobs:
   pr-handler:
     runs-on: ubuntu-latest
-    if: github.event_name == 'pull_request' && github.event.action != 'closed'
-
+    if: github.event.pull_request != null
     steps:
+      - name: Checkout base branch only
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.pull_request.base.ref }}
+          fetch-depth: 0
+          persist-credentials: false
+
       - name: Generate DevHub Bot token
         id: app-token
         uses: actions/create-github-app-token@v1
@@ -37,13 +43,7 @@ jobs:
           app-id: ${{ secrets.DEVHUB_APP_ID }}
           private-key: ${{ secrets.DEVHUB_APP_PRIVATE_KEY }}
 
-      - name: Checkout repo
-        uses: actions/checkout@v5
-        with:
-          fetch-depth: 0
-          persist-credentials: false
-
-      - name: Fetch PR commits
+      - name: Fetch all PR commits via API
         id: commits
         uses: actions/github-script@v7
         with:
@@ -57,81 +57,33 @@ jobs:
                 pull_number: context.payload.pull_request.number
               }
             );
-            core.setOutput(
-              "messages",
-              JSON.stringify(commits.map(c => c.commit.message))
-            );
+            core.setOutput("messages", JSON.stringify(commits.map(c => c.commit.message)));
 
-      - name: Analyze PR title & commits
+      - name: Check Conventional Commits
         id: analyze
         run: |
           echo '${{ steps.commits.outputs.messages }}' > commits.json
 
-          FOUND=false
-          LABELS=""
-          PR_TITLE="${{ github.event.pull_request.title }}"
-
+          NON_CC=false
           regex='^(feat|fix|docs|style|refactor|perf|test|chore)(\(.+\))?:\ .+'
 
-          if [[ "$PR_TITLE" =~ $regex ]]; then
-            TYPE=$(echo "$PR_TITLE" | sed -E 's/^([a-z]+).*/\1/')
-            LABELS="$LABELS $TYPE"
-            FOUND=true
-          fi
-
           while read -r msg; do
-            if [[ "$msg" =~ $regex ]]; then
-              TYPE=$(echo "$msg" | sed -E 's/^([a-z]+).*/\1/')
-              LABELS="$LABELS $TYPE"
-              FOUND=true
+            if [[ ! "$msg" =~ $regex ]]; then
+              NON_CC=true
+              break
             fi
           done < <(jq -r '.[]' commits.json)
 
-          LABELS=$(echo "$LABELS" | tr ' ' '\n' | sort -u | tr '\n' ',' | sed 's/,$//')
+          echo "non_cc=$NON_CC" >> $GITHUB_OUTPUT
 
-          echo "pass=$FOUND" >> $GITHUB_OUTPUT
-          echo "labels=$LABELS" >> $GITHUB_OUTPUT
-
-      - name: Apply labels
+      - name: Comment as bot
         uses: actions/github-script@v7
         with:
           github-token: ${{ steps.app-token.outputs.token }}
           script: |
-            const raw = "${{ steps.analyze.outputs.labels }}";
-
-            if (!raw || raw.trim().length === 0) {
-              console.log("No labels to apply");
-              return;
-            }
-
-            const labels = raw
-              .split(",")
-              .map(l => l.trim())
-              .filter(l => l.length > 0);
-
-            if (labels.length === 0) {
-              console.log("Labels resolved to empty after filtering");
-              return;
-            }
-
-            console.log("Applying labels:", labels);
-
-            await github.rest.issues.addLabels({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              issue_number: context.payload.pull_request.number,
-              labels,
-            });
-
-      - name: Comment on PR
-        uses: actions/github-script@v7
-        with:
-          github-token: ${{ steps.app-token.outputs.token }}
-          script: |
-            const body =
-              "${{ steps.analyze.outputs.pass }}" === "true"
-                ? `${{ inputs.thank_you_message }}`
-                : `${{ inputs.cc_warning_message }}`;
+            const body = "${{ steps.analyze.outputs.non_cc }}" === "true"
+              ? `${{ inputs.cc_warning_message }}`
+              : `${{ inputs.thank_you_message }}`;
 
             await github.rest.issues.createComment({
               owner: context.repo.owner,
@@ -140,28 +92,22 @@ jobs:
               body
             });
 
-      - name: Super Linter (non-blocking)
-        continue-on-error: true
-        uses: super-linter/super-linter@v8.4.0
-        env:
-          GITHUB_TOKEN: ${{ steps.app-token.outputs.token }}
-          VALIDATE_ALL_CODEBASE: false
-          VALIDATE_JAVASCRIPT_PRETTIER: true
-          VALIDATE_TYPESCRIPT_PRETTIER: true
-
   pr-merged:
     runs-on: ubuntu-latest
-    if: github.event_name == 'pull_request' && github.event.pull_request.merged == true
-
+    if: github.event.pull_request != null && github.event.pull_request.merged == true
     steps:
-      - name: Generate token
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.pull_request.base.ref }}
+
+      - name: Generate DevHub Bot token
         id: app-token
         uses: actions/create-github-app-token@v1
         with:
           app-id: ${{ secrets.DEVHUB_APP_ID }}
           private-key: ${{ secrets.DEVHUB_APP_PRIVATE_KEY }}
 
-      - name: Thank contributor
+      - name: Thank contributor as bot
         uses: actions/github-script@v7
         with:
           github-token: ${{ steps.app-token.outputs.token }}
@@ -176,9 +122,8 @@ jobs:
   issue-opened:
     runs-on: ubuntu-latest
     if: github.event_name == 'issues' && github.event.action == 'opened'
-
     steps:
-      - name: Generate token
+      - name: Generate DevHub Bot token
         id: app-token
         uses: actions/create-github-app-token@v1
         with:
@@ -207,16 +152,12 @@ jobs:
               .filter(l => typeof l === "string" && l.trim().length > 0);
 
             if (labels.length > 0) {
-              console.log("Applying labels:", labels);
-
               await github.rest.issues.addLabels({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
                 issue_number: issue.number,
                 labels,
               });
-            } else {
-              console.log("No labels detected — skipping label API call");
             }
 
             await github.rest.issues.createComment({
