@@ -27,7 +27,7 @@ on:
 jobs:
   pr-handler:
     runs-on: ubuntu-latest
-    if: github.event_name == 'pull_request'
+    if: github.event_name == 'pull_request' && github.event.action != 'closed'
 
     steps:
       - name: Generate DevHub Bot token
