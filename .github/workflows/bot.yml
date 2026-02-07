@@ -5,17 +5,17 @@ on:
     inputs:
       thank_you_message:
         required: false
-        default: "Thank you for opening this PR! Repo maintainers will review it ASAP 🚀"
+        default: 'Thank you for opening this PR! Repo maintainers will review it ASAP 🚀'
         type: string
 
       merge_thank_you_message:
         required: false
-        default: "🎉 Thank you for contributing to Open DevHub! We appreciate your work."
+        default: '🎉 Thank you for contributing! We really appreciate your work.'
         type: string
 
       cc_warning_message:
         required: false
-        default: "⚠️ Please consider using Conventional Commits (e.g. feat:, fix:, docs:)."
+        default: '⚠️ Please consider using Conventional Commits (e.g. feat:, fix:, docs:).'
         type: string
 
     secrets:
@@ -189,7 +189,7 @@ jobs:
               },
               {
                 keywords: ["doc", "docs", "readme"],
-                label: "documentation",
+                label: "docs",
               },
               {
                 keywords: ["question", "help"],
