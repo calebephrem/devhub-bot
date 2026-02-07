@@ -4,21 +4,18 @@ on:
   workflow_call:
     inputs:
       thank_you_message:
-        description: 'Message when PR follows conventional commits'
         required: false
-        default: 'Thank you for opening this PR! Repo maintainers will review it ASAP 🚀'
+        default: "Thank you for opening this PR! Repo maintainers will review it ASAP 🚀"
         type: string
 
       merge_thank_you_message:
-        description: 'Message when PR is merged'
         required: false
-        default: '🎉 Thank you for contributing to Open DevHub! We appreciate your work.'
+        default: "🎉 Thank you for contributing to Open DevHub! We appreciate your work."
         type: string
 
       cc_warning_message:
-        description: 'Message when PR does NOT follow conventional commits'
         required: false
-        default: '⚠️ Consider following Conventional Commits for your PR title and commit messages.'
+        default: "⚠️ Please consider using Conventional Commits (e.g. feat:, fix:, docs:)."
         type: string
 
     secrets:
@@ -28,9 +25,9 @@ on:
         required: true
 
 jobs:
-  pr-opened:
-    if: github.event_name == 'pull_request' && github.event.action != 'closed' && github.event.pull_request.head.repo.full_name == github.repository
+  pr-handler:
     runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
 
     steps:
       - name: Generate DevHub Bot token
@@ -40,11 +37,9 @@ jobs:
           app-id: ${{ secrets.DEVHUB_APP_ID }}
           private-key: ${{ secrets.DEVHUB_APP_PRIVATE_KEY }}
 
-      - name: Checkout Code
+      - name: Checkout repo
         uses: actions/checkout@v5
         with:
-          # super-linter needs the full git history to get the
-          # list of files that changed across commits
           fetch-depth: 0
           persist-credentials: false
 
@@ -62,9 +57,12 @@ jobs:
                 pull_number: context.payload.pull_request.number
               }
             );
-            core.setOutput("messages", JSON.stringify(commits.map(c => c.commit.message)));
+            core.setOutput(
+              "messages",
+              JSON.stringify(commits.map(c => c.commit.message))
+            );
 
-      - name: Analyze PR title + commits for labels
+      - name: Analyze PR title & commits
         id: analyze
         run: |
           echo '${{ steps.commits.outputs.messages }}' > commits.json
@@ -73,73 +71,72 @@ jobs:
           LABELS=""
           PR_TITLE="${{ github.event.pull_request.title }}"
 
-          # Check PR title
-          if [[ "$PR_TITLE" =~ ^(feat|fix|docs|style|refactor|perf|test|chore)(\(.+\))?:\ .+ ]]; then
+          regex='^(feat|fix|docs|style|refactor|perf|test|chore)(\(.+\))?:\ .+'
+
+          if [[ "$PR_TITLE" =~ $regex ]]; then
             TYPE=$(echo "$PR_TITLE" | sed -E 's/^([a-z]+).*/\1/')
             LABELS="$LABELS $TYPE"
             FOUND=true
           fi
 
-          # Check commits
           while read -r msg; do
-            if [[ "$msg" =~ ^(feat|fix|docs|style|refactor|perf|test|chore)(\(.+\))?:\ .+ ]]; then
+            if [[ "$msg" =~ $regex ]]; then
               TYPE=$(echo "$msg" | sed -E 's/^([a-z]+).*/\1/')
               LABELS="$LABELS $TYPE"
               FOUND=true
             fi
           done < <(jq -r '.[]' commits.json)
 
-          # Remove duplicates and prepare comma-separated labels
-          LABELS=$(echo $LABELS | tr ' ' '\n' | sort -u | tr '\n' ',' | sed 's/,$//')
+          LABELS=$(echo "$LABELS" | tr ' ' '\n' | sort -u | tr '\n' ',' | sed 's/,$//')
+
           echo "pass=$FOUND" >> $GITHUB_OUTPUT
           echo "labels=$LABELS" >> $GITHUB_OUTPUT
 
-      - name: Apply labels to PR
+      - name: Apply labels
         if: steps.analyze.outputs.labels != ''
         uses: actions/github-script@v7
         with:
           github-token: ${{ steps.app-token.outputs.token }}
           script: |
-            const pr_number = context.payload.pull_request.number;
-            const labels = "${{ steps.analyze.outputs.labels }}".split(",");
             await github.rest.issues.addLabels({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              issue_number: pr_number,
-              labels: labels
+              issue_number: context.payload.pull_request.number,
+              labels: "${{ steps.analyze.outputs.labels }}".split(",")
             });
-
-      - name: Run Super Linter
-        id: linter
-        uses: super-linter/super-linter@v8.4.0
-        env:
-          GITHUB_TOKEN: ${{ steps.app-token.outputs.token }}
-          VALIDATE_JAVASCRIPT_PRETTIER: true
-          VALIDATE_TYPESCRIPT_PRETTIER: true
-          VALIDATE_ALL_CODEBASE: false
-          ENABLE_GITHUB_ACTIONS_GROUP_TITLE: true
 
       - name: Comment on PR
         uses: actions/github-script@v7
         with:
           github-token: ${{ steps.app-token.outputs.token }}
           script: |
-            const pr_number = context.payload.pull_request.number;
-            const msg = "${{ steps.analyze.outputs.pass }}" === "true" 
-                        ? `${{ inputs.thank_you_message }}`
-                        : `${{ inputs.cc_warning_message }}`;
+            const body =
+              "${{ steps.analyze.outputs.pass }}" === "true"
+                ? `${{ inputs.thank_you_message }}`
+                : `${{ inputs.cc_warning_message }}`;
+
             await github.rest.issues.createComment({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              issue_number: pr_number,
-              body: msg
+              issue_number: context.payload.pull_request.number,
+              body
             });
 
+      - name: Super Linter (non-blocking)
+        continue-on-error: true
+        uses: super-linter/super-linter@v8.4.0
+        env:
+          GITHUB_TOKEN: ${{ steps.app-token.outputs.token }}
+          VALIDATE_ALL_CODEBASE: false
+          VALIDATE_JAVASCRIPT_PRETTIER: true
+          VALIDATE_TYPESCRIPT_PRETTIER: true
+
   pr-merged:
-    if: github.event_name == 'pull_request' && github.event.pull_request.merged == true
     runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request' && github.event.pull_request.merged == true
+
     steps:
-      - name: Generate DevHub Bot token
+      - name: Generate token
         id: app-token
         uses: actions/create-github-app-token@v1
         with:
@@ -159,27 +156,78 @@ jobs:
             });
 
   issue-opened:
-    if: github.event_name == 'issues' && github.event.action == 'opened'
     runs-on: ubuntu-latest
+    if: github.event_name == 'issues' && github.event.action == 'opened'
+
     steps:
-      - name: Generate DevHub Bot token
+      - name: Generate token
         id: app-token
         uses: actions/create-github-app-token@v1
         with:
           app-id: ${{ secrets.DEVHUB_APP_ID }}
           private-key: ${{ secrets.DEVHUB_APP_PRIVATE_KEY }}
 
-      - name: Add bug label if title contains "bug"
+      - name: Handle new issue (labels + comment)
         uses: actions/github-script@v7
         with:
           github-token: ${{ steps.app-token.outputs.token }}
           script: |
-            const title = context.payload.issue.title.toLowerCase();
-            if (title.includes("bug")) {
+            const issue = context.payload.issue;
+
+            const text = `${issue.title}\n${issue.body || ""}`.toLowerCase();
+
+            const labels = new Set();
+
+            const rules = [
+              {
+                keywords: ["bug", "error", "crash", "fail"],
+                label: "bug",
+              },
+              {
+                keywords: ["feature", "request", "enhancement"],
+                label: "enhancement",
+              },
+              {
+                keywords: ["doc", "docs", "readme"],
+                label: "documentation",
+              },
+              {
+                keywords: ["question", "help"],
+                label: "question",
+              },
+            ];
+
+            for (const rule of rules) {
+              if (rule.keywords.some((k) => text.includes(k))) {
+                labels.add(rule.label);
+              }
+            }
+
+            if (labels.size > 0) {
               await github.rest.issues.addLabels({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
-                issue_number: context.payload.issue.number,
-                labels: ["bug"]
+                issue_number: issue.number,
+                labels: Array.from(labels),
               });
             }
+
+            const commentLines = [
+              "👋 **Thanks for opening this issue!**",
+              "",
+              "The Open DevHub maintainers have been notified and will review it as soon as possible 🚀",
+              "",
+              "📌 **Tips to speed things up:**",
+              "- Provide clear steps to reproduce (if it's a bug)",
+              "- Attach screenshots or logs if relevant",
+              "- Mention expected vs actual behavior",
+              "",
+              "We appreciate your contribution 💙",
+            ];
+
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: issue.number,
+              body: commentLines.join("\n"),
+            });

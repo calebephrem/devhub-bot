@@ -34,12 +34,23 @@ Open DevHub Bot is implemented as:
 - a **GitHub App** (identity, permissions, avatar), and
 - a **reusable GitHub Actions workflow** (automation logic)
 
-Repositories within the Open DevHub organization “call” the bot using a reusable workflow:
+Repositories within the Open DevHub organization “call” the bot using a reusable workflow ([reuse.yml](./reuse.yml)):
 
 ```yaml
+name: DevHub Bot
+
+on:
+  pull_request:
+    types: [opened, synchronize, closed]
+  issues:
+    types: [opened]
+
 jobs:
   devhub-bot:
     uses: open-devhub/devhub-bot/.github/workflows/bot.yml@main
+    secrets:
+      DEVHUB_APP_ID: ${{ secrets.DEVHUB_APP_ID }}
+      DEVHUB_APP_PRIVATE_KEY: ${{ secrets.DEVHUB_APP_PRIVATE_KEY }}
 ```
 
 The bot reacts to GitHub events such as:

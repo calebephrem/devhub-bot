@@ -2,7 +2,7 @@ name: DevHub Bot
 
 on:
   pull_request:
-    types: [opened, synchronize, closed]
+    types: [opened, synchronize, closed, reopened]
   issues:
     types: [opened]
 
