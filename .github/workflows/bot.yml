@@ -15,7 +15,7 @@ on:
 
       cc_warning_message:
         required: false
-        default: '⚠️ Please consider using Conventional Commits (e.g. feat:, fix:, docs:).'
+        default: "⚠️ Please consider using Conventional Commits (e.g. feat:, fix:, docs:).\nhttps://www.conventionalcommits.org/en/v1.0.0/"
         type: string
 
     secrets:
@@ -27,7 +27,7 @@ on:
 jobs:
   pr-handler:
     runs-on: ubuntu-latest
-    if: github.event_name == 'pull_request'
+    if: github.event_name == 'pull_request' && github.event.action != 'closed'
 
     steps:
       - name: Generate DevHub Bot token
@@ -167,63 +167,54 @@ jobs:
           app-id: ${{ secrets.DEVHUB_APP_ID }}
           private-key: ${{ secrets.DEVHUB_APP_PRIVATE_KEY }}
 
-      - name: Handle new issue (labels + comment)
+      - name: Handle issue open (labels + comment)
         uses: actions/github-script@v7
         with:
           github-token: ${{ steps.app-token.outputs.token }}
           script: |
             const issue = context.payload.issue;
 
-            const text = `${issue.title}\n${issue.body || ""}`.toLowerCase();
-
-            const detectedLabels = [];
+            const text = `${issue.title}\n${issue.body ?? ""}`.toLowerCase();
 
             const rules = [
-              { keywords: ["bug", "error", "crash", "fail"], label: "bug" },
-              { keywords: ["feature", "request", "enhancement"], label: "enhancement" },
-              { keywords: ["doc", "docs", "readme"], label: "documentation" },
-              { keywords: ["question", "help"], label: "question" },
+              { label: "bug", keywords: ["bug", "error", "crash", "fail", "issue"] },
+              { label: "enhancement", keywords: ["feature", "request", "enhance"] },
+              { label: "documentation", keywords: ["docs", "readme", "documentation"] },
+              { label: "question", keywords: ["question", "help"] },
             ];
 
-            for (const rule of rules) {
-              if (
-                rule.label &&
-                rule.keywords.some((k) => text.includes(k))
-              ) {
-                detectedLabels.push(rule.label);
-              }
-            }
-
-            // Deduplicate + remove invalid values
-            const labels = [...new Set(detectedLabels)].filter(
-              (l) => typeof l === "string" && l.trim().length > 0
-            );
+            const labels = rules
+              .filter(r => r.label && r.keywords.some(k => text.includes(k)))
+              .map(r => r.label)
+              .filter(l => typeof l === "string" && l.trim().length > 0);
 
             if (labels.length > 0) {
+              console.log("Applying labels:", labels);
+
               await github.rest.issues.addLabels({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
                 issue_number: issue.number,
                 labels,
               });
+            } else {
+              console.log("No labels detected — skipping label API call");
             }
-
-            const comment = [
-              "👋 **Thanks for opening this issue!**",
-              "",
-              "The DevHub maintainers have been notified and will review it ASAP 🚀",
-              "",
-              "📌 **Tips to help us help you:**",
-              "- Clear steps to reproduce (for bugs)",
-              "- Expected vs actual behavior",
-              "- Screenshots or logs if applicable",
-              "",
-              "Thanks for contributing 💙",
-            ].join("\n");
 
             await github.rest.issues.createComment({
               owner: context.repo.owner,
               repo: context.repo.repo,
               issue_number: issue.number,
-              body: comment,
+              body: [
+                "👋 **Thanks for opening this issue!**",
+                "",
+                "Our maintainers have been notified and will review it as soon as possible 🚀",
+                "",
+                "📌 **To help us resolve this faster:**",
+                "- Include clear steps to reproduce (for bugs)",
+                "- Mention expected vs actual behavior",
+                "- Add screenshots or logs if relevant",
+                "",
+                "Thanks for contributing to **Open DevHub** 💙",
+              ].join("\n"),
             });
